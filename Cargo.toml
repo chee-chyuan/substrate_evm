@@ -4,7 +4,7 @@ members = [
     "pallets/template",
     "pallets/mypallet",
     "pallets/test_evm",
-    # "pallets/test_ethereum",
+    "pallets/test_ethereum",
     "runtime",
 ]
 [profile.release]
