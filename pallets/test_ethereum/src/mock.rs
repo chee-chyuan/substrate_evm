@@ -1,3 +1,20 @@
+use frame_support::{
+	parameter_types,
+	sp_runtime::{
+		app_crypto::sp_core::{H160, U256},
+		testing::Header,
+		testing::H256,
+		traits::{BlakeTwo256, IdentityLookup},
+		AccountId32,
+	},
+	traits::{ConstU16, ConstU64},
+};
+use pallet_ethereum::IntermediateStateRoot;
+use pallet_evm::{AddressMapping, EnsureAddressNever, EnsureAddressRoot};
+
+type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
+type Block = frame_system::mocking::MockBlock<Test>;
+
 frame_support::construct_runtime!(
 	pub enum Test where
 		Block = Block,
@@ -23,14 +40,14 @@ impl frame_system::Config for Test {
 	type BlockNumber = u64;
 	type Hash = H256;
 	type Hashing = BlakeTwo256;
-	type AccountId = u64;
+	type AccountId = AccountId32;
 	type Lookup = IdentityLookup<Self::AccountId>;
 	type Header = Header;
 	type Event = Event;
 	type BlockHashCount = ConstU64<250>;
 	type Version = ();
 	type PalletInfo = PalletInfo;
-	type AccountData = ();
+	type AccountData = pallet_balances::AccountData<u64>;
 	type OnNewAccount = ();
 	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
@@ -68,12 +85,22 @@ parameter_types! {
 	pub BlockGasLimit: U256 = U256::max_value();
 }
 
+pub struct HashedAddressMapping;
+
+impl AddressMapping<AccountId32> for HashedAddressMapping {
+	fn into_account_id(address: H160) -> AccountId32 {
+		let mut data = [0u8; 32];
+		data[0..20].copy_from_slice(&address[..]);
+		AccountId32::from(Into::<[u8; 32]>::into(data))
+	}
+}
+
 impl pallet_evm::Config for Test {
 	type FeeCalculator = ();
 	type GasWeightMapping = ();
 	type CallOrigin = EnsureAddressRoot<Self::AccountId>;
 	type WithdrawOrigin = EnsureAddressNever<Self::AccountId>;
-	type AddressMapping = IdentityAddressMapping;
+	type AddressMapping = HashedAddressMapping;
 	type Currency = Balances;
 	type Event = Event;
 	type Runner = pallet_evm::runner::stack::Runner<Self>;
@@ -82,8 +109,9 @@ impl pallet_evm::Config for Test {
 	type ChainId = ();
 	type OnChargeTransaction = ();
 	type BlockGasLimit = BlockGasLimit;
-	type BlockHashMapping = pallet_evm::SubstrateBlockHashMapping<Self>;
+	type BlockHashMapping = pallet_ethereum::EthereumBlockHashMapping<Self>;
 	type FindAuthor = ();
+	type WeightInfo = ();
 }
 
 impl pallet_ethereum::Config for Test {
