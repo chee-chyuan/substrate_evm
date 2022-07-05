@@ -95,7 +95,7 @@ fn test_deploy_contract() {
 		let contract_address = if let CallOrCreateInfo::Create(t) = tx_info.2 {
 			t.value
 		} else {
-			H160::from_str("1000000000000000000000000000000000000001").unwrap()
+			panic!("should not occur");
 		};
 
         // println!("{:?}", contract_address);
