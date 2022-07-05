@@ -13,6 +13,7 @@ use frame_support::{
 };
 use pallet_ethereum::IntermediateStateRoot;
 use pallet_evm::{AddressMapping, EnsureAddressNever, EnsureAddressRoot};
+use sha3::{Digest, Keccak256};
 
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
@@ -49,7 +50,7 @@ impl frame_system::Config for Test {
 	type BlockHashCount = ConstU64<250>;
 	type Version = ();
 	type PalletInfo = PalletInfo;
-	type AccountData = pallet_balances::AccountData<u64>;
+	type AccountData = pallet_balances::AccountData<u128>;
 	type OnNewAccount = ();
 	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
@@ -63,7 +64,7 @@ parameter_types! {
 }
 impl pallet_balances::Config for Test {
 	type MaxLocks = ();
-	type Balance = u64;
+	type Balance = u128;
 	type DustRemoval = ();
 	type Event = Event;
 	type ExistentialDeposit = ExistentialDeposit;
@@ -121,19 +122,56 @@ impl pallet_ethereum::Config for Test {
 	type StateRoot = IntermediateStateRoot<Self>;
 }
 
-pub fn new_test_ext() -> sp_io::TestExternalities {
+pub struct AccountInfo {
+	pub address: H160,
+	pub account_id: AccountId32,
+	pub private_key: H256,
+}
+
+fn address_build(seed: u8) -> AccountInfo {
+	let private_key = H256::from_slice(&[(seed + 1) as u8; 32]); //H256::from_low_u64_be((i + 1) as u64);
+	let secret_key = libsecp256k1::SecretKey::parse_slice(&private_key[..]).unwrap();
+	let public_key = &libsecp256k1::PublicKey::from_secret_key(&secret_key).serialize()[1..65];
+	let address = H160::from(H256::from_slice(&Keccak256::digest(public_key)[..]));
+
+	let mut data = [0u8; 32];
+	data[0..20].copy_from_slice(&address[..]);
+
+	AccountInfo {
+		private_key,
+		account_id: AccountId32::from(Into::<[u8; 32]>::into(data)),
+		address,
+	}
+}
+
+pub fn new_test_ext(no_of_accounts: usize) -> (Vec<AccountInfo>, sp_io::TestExternalities) {
 	let mut t = frame_system::GenesisConfig::default().build_storage::<Test>().unwrap();
 
 	let mut accounts = std::collections::BTreeMap::new();
-	accounts.insert(
-		H160::from_str("1000000000000000000000000000000000000001").unwrap(),
-		fp_evm::GenesisAccount {
-			nonce: U256::from(0),
-			balance: U256::max_value(),
-			storage: std::collections::BTreeMap::<H256, H256>::new(),
-			code: vec![],
-		},
-	);
+	// accounts.insert(
+	// 	H160::from_str("1000000000000000000000000000000000000001").unwrap(),
+	// 	fp_evm::GenesisAccount {
+	// 		nonce: U256::from(0),
+	// 		// balance: U256::from(1),
+	// 		balance: U256::max_value(),
+	// 		storage: std::collections::BTreeMap::<H256, H256>::new(),
+	// 		code: vec![],
+	// 	},
+	// );
+
+	let pairs = (0..no_of_accounts).map(|i| address_build(i as u8)).collect::<Vec<_>>();
+
+	for pair in pairs.iter() {
+		accounts.insert(
+			pair.address,
+			fp_evm::GenesisAccount {
+				nonce: U256::from(0),
+				balance: U256::max_value(),
+				storage: std::collections::BTreeMap::<H256, H256>::new(),
+				code: vec![],
+			},
+		);
+	}
 
 	<pallet_evm::GenesisConfig as GenesisBuild<Test>>::assimilate_storage(
 		&pallet_evm::GenesisConfig { accounts },
@@ -141,5 +179,5 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
 	)
 	.expect("Cannot assimilate storage");
 
-	sp_io::TestExternalities::new(t)
+	(pairs, sp_io::TestExternalities::new(t))
 }

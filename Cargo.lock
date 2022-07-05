@@ -7626,12 +7626,14 @@ dependencies = [
  "fp-evm",
  "frame-support",
  "frame-system",
+ "libsecp256k1",
  "pallet-balances",
  "pallet-ethereum",
  "pallet-evm",
  "pallet-timestamp",
  "parity-scale-codec",
  "scale-info",
+ "sha3 0.10.1",
  "sp-io",
 ]
 
