@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use frame_support::{
 	parameter_types,
 	sp_runtime::{
@@ -7,7 +9,7 @@ use frame_support::{
 		traits::{BlakeTwo256, IdentityLookup},
 		AccountId32,
 	},
-	traits::{ConstU16, ConstU64},
+	traits::{ConstU16, ConstU64, GenesisBuild},
 };
 use pallet_ethereum::IntermediateStateRoot;
 use pallet_evm::{AddressMapping, EnsureAddressNever, EnsureAddressRoot};
@@ -117,4 +119,27 @@ impl pallet_evm::Config for Test {
 impl pallet_ethereum::Config for Test {
 	type Event = Event;
 	type StateRoot = IntermediateStateRoot<Self>;
+}
+
+pub fn new_test_ext() -> sp_io::TestExternalities {
+	let mut t = frame_system::GenesisConfig::default().build_storage::<Test>().unwrap();
+
+	let mut accounts = std::collections::BTreeMap::new();
+	accounts.insert(
+		H160::from_str("1000000000000000000000000000000000000001").unwrap(),
+		fp_evm::GenesisAccount {
+			nonce: U256::from(0),
+			balance: U256::max_value(),
+			storage: std::collections::BTreeMap::<H256, H256>::new(),
+			code: vec![],
+		},
+	);
+
+	<pallet_evm::GenesisConfig as GenesisBuild<Test>>::assimilate_storage(
+		&pallet_evm::GenesisConfig { accounts },
+		&mut t,
+	)
+	.expect("Cannot assimilate storage");
+
+	sp_io::TestExternalities::new(t)
 }

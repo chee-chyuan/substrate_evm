@@ -7623,6 +7623,7 @@ dependencies = [
 name = "test_ethereum"
 version = "0.1.0"
 dependencies = [
+ "fp-evm",
  "frame-support",
  "frame-system",
  "pallet-balances",
@@ -7631,6 +7632,7 @@ dependencies = [
  "pallet-timestamp",
  "parity-scale-codec",
  "scale-info",
+ "sp-io",
 ]
 
 [[package]]

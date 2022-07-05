@@ -18,7 +18,9 @@ pallet-ethereum = { default-features = false, git = "https://github.com/purestak
 pallet-timestamp = { default-features = false, git = "https://github.com/paritytech/substrate", branch = "polkadot-v0.9.20" }
 
 [dev-dependencies]
+fp-evm = {default-features = false, git = "https://github.com/purestake/frontier", branch = "moonbeam-polkadot-v0.9.20"}
 pallet-balances = { git = "https://github.com/paritytech/substrate", branch = "polkadot-v0.9.20" }
+sp-io = { default-features = false, git = "https://github.com/paritytech/substrate.git", branch = "polkadot-v0.9.20" }
 
 [features]
 default = ["std"]
