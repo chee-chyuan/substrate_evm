@@ -1,4 +1,4 @@
-use ethereum::{TransactionAction, TransactionSignature, TransactionV2 as Transaction};
+use ethereum::{TransactionAction, TransactionV2 as Transaction};
 use ethereum_types::{U256, H256};
 
 pub struct UnsignedTransaction {

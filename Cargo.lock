@@ -7634,6 +7634,7 @@ dependencies = [
  "pallet-evm",
  "pallet-timestamp",
  "parity-scale-codec",
+ "rustc-hex",
  "scale-info",
  "sha3 0.10.1",
  "sp-io",

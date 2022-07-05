@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use frame_support::{
 	parameter_types,
 	sp_runtime::{
@@ -166,7 +164,7 @@ pub fn new_test_ext(no_of_accounts: usize) -> (Vec<AccountInfo>, sp_io::TestExte
 			pair.address,
 			fp_evm::GenesisAccount {
 				nonce: U256::from(0),
-				balance: U256::max_value(),
+				balance: U256::from(10_000_000 as u64),
 				storage: std::collections::BTreeMap::<H256, H256>::new(),
 				code: vec![],
 			},
