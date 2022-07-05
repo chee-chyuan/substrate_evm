@@ -6,3 +6,6 @@ mod tests;
 
 #[cfg(test)]
 mod contracts;
+
+#[cfg(test)]
+mod transactions;

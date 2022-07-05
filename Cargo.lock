@@ -7623,6 +7623,8 @@ dependencies = [
 name = "test_ethereum"
 version = "0.1.0"
 dependencies = [
+ "ethereum",
+ "ethereum-types",
  "fp-evm",
  "frame-support",
  "frame-system",

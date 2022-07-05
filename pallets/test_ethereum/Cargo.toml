@@ -20,6 +20,8 @@ pallet-timestamp = { default-features = false, git = "https://github.com/parityt
 sha3 = { version = "0.10", default-features = false }
 
 [dev-dependencies]
+ethereum = { version = "0.12.0", default-features = false, features = ["with-codec"] }
+ethereum-types = { version = "0.13.1", default-features = false }
 libsecp256k1 = { version = "0.7", features = ["static-context", "hmac"] }
 fp-evm = {default-features = false, git = "https://github.com/purestake/frontier", branch = "moonbeam-polkadot-v0.9.20"}
 pallet-balances = { git = "https://github.com/paritytech/substrate", branch = "polkadot-v0.9.20" }
@@ -36,4 +38,6 @@ std = [
     "pallet-ethereum/std",
 	"pallet-timestamp/std",
     "sha3/std",
+    "ethereum/std",
+    "ethereum-types/std",
 ]
