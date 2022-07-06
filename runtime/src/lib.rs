@@ -11,17 +11,20 @@ use pallet_grandpa::{
 };
 use sp_api::impl_runtime_apis;
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
-use sp_core::{crypto::KeyTypeId, OpaqueMetadata};
+use sp_core::{crypto::KeyTypeId, OpaqueMetadata, H160, U256};
 use sp_runtime::{
 	create_runtime_str, generic, impl_opaque_keys,
 	traits::{AccountIdLookup, BlakeTwo256, Block as BlockT, IdentifyAccount, NumberFor, Verify},
 	transaction_validity::{TransactionSource, TransactionValidity},
-	ApplyExtrinsicResult, MultiSignature,
+	ApplyExtrinsicResult, MultiSignature, AccountId32,
 };
 use sp_std::prelude::*;
 #[cfg(feature = "std")]
 use sp_version::NativeVersion;
 use sp_version::RuntimeVersion;
+
+#[cfg(feature = "std")]
+pub use fp_evm::GenesisAccount;
 
 // A few exports that help ease life for downstream crates.
 pub use frame_support::{
@@ -40,6 +43,9 @@ use pallet_transaction_payment::CurrencyAdapter;
 #[cfg(any(feature = "std", test))]
 pub use sp_runtime::BuildStorage;
 pub use sp_runtime::{Perbill, Permill};
+
+use pallet_ethereum::IntermediateStateRoot;
+use pallet_evm::{AddressMapping, EnsureAddressNever, EnsureAddressRoot};
 
 /// Import the template pallet.
 pub use pallet_template;
@@ -268,6 +274,45 @@ impl pallet_template::Config for Runtime {
 	type Event = Event;
 }
 
+parameter_types! {
+	pub BlockGasLimit: U256 = U256::max_value();
+}
+
+pub struct HashedAddressMapping;
+
+impl AddressMapping<AccountId32> for HashedAddressMapping {
+	fn into_account_id(address: H160) -> AccountId32 {
+		let mut data = [0u8; 32];
+		data[0..20].copy_from_slice(&address[..]);
+		AccountId32::from(Into::<[u8; 32]>::into(data))
+	}
+}
+
+impl pallet_evm::Config for Runtime {
+	type FeeCalculator = ();
+	type GasWeightMapping = ();
+	type CallOrigin = EnsureAddressRoot<Self::AccountId>;
+	type WithdrawOrigin = EnsureAddressNever<Self::AccountId>;
+	type AddressMapping = HashedAddressMapping;
+	type Currency = Balances;
+	type Event = Event;
+	type Runner = pallet_evm::runner::stack::Runner<Self>;
+	type PrecompilesType = ();
+	type PrecompilesValue = ();
+	type ChainId = ();
+	type OnChargeTransaction = ();
+	type BlockGasLimit = BlockGasLimit;
+	type BlockHashMapping = pallet_ethereum::EthereumBlockHashMapping<Self>;
+	type FindAuthor = ();
+	type WeightInfo = ();
+}
+
+impl pallet_ethereum::Config for Runtime {
+	type Event = Event;
+	type StateRoot = IntermediateStateRoot<Self>;
+}
+
+
 // Create the runtime by composing the FRAME pallets that were previously configured.
 construct_runtime!(
 	pub enum Runtime where
@@ -285,6 +330,8 @@ construct_runtime!(
 		Sudo: pallet_sudo,
 		// Include the custom logic from the pallet-template in the runtime.
 		TemplateModule: pallet_template,
+		EVM: pallet_evm::{Pallet, Call, Storage, Config, Event<T>},
+		Ethereum: pallet_ethereum::{Pallet, Call, Storage, Event, Origin, Config}
 	}
 );
 

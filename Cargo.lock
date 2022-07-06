@@ -3934,6 +3934,7 @@ dependencies = [
  "frame-benchmarking",
  "frame-benchmarking-cli",
  "frame-system",
+ "hex-literal",
  "jsonrpc-core",
  "node-template-runtime",
  "pallet-transaction-payment",
@@ -3972,6 +3973,7 @@ dependencies = [
 name = "node-template-runtime"
 version = "4.0.0-dev"
 dependencies = [
+ "fp-evm",
  "frame-benchmarking",
  "frame-executive",
  "frame-support",
@@ -3982,6 +3984,8 @@ dependencies = [
  "hex-literal",
  "pallet-aura",
  "pallet-balances",
+ "pallet-ethereum",
+ "pallet-evm",
  "pallet-grandpa",
  "pallet-randomness-collective-flip",
  "pallet-sudo",
