@@ -2,6 +2,7 @@ use std::str::FromStr;
 
 use fp_evm::CallOrCreateInfo;
 use frame_support::sp_runtime::app_crypto::sp_core::{H160, U256};
+use pallet_ethereum::RawOrigin;
 
 use super::contracts::simple_storage::STORAGE_BYTECODE;
 use crate::{
@@ -98,9 +99,37 @@ fn test_deploy_contract() {
 			panic!("should not occur");
 		};
 
-        // println!("{:?}", contract_address);
-        let code = EVM::account_codes(contract_address).to_hex::<String>();
-        println!("{:?}", code);
-        assert_eq!(code, STORAGE_BYTECODE); // not equal cos i didnt exclude the deployment bytecode, else it will be equal. lazy to exclude :p
+		// println!("{:?}", contract_address);
+		let code = EVM::account_codes(contract_address).to_hex::<String>();
+		println!("{:?}", code);
+		assert_eq!(code, STORAGE_BYTECODE); // not equal cos i didnt exclude the deployment bytecode, else it will be equal. lazy to exclude :p
+	})
+}
+
+// transact is 'callable' from the outside, 'execute' is not
+#[test]
+fn test_using_transact() {
+	let (pairs, mut ext) = new_test_ext(1);
+	let alice = &pairs[0];
+	let bob = address_build(2);
+
+	ext.execute_with(|| {
+		let account_basic_alice_before = EVM::account_basic(&alice.address);
+
+		let transfer_amount = U256::from(100);
+		let tx_signed = UnsignedTransaction {
+			nonce: account_basic_alice_before.0.nonce,
+			max_priority_fee_per_gas: U256::from(1),
+			max_fee_per_gas: U256::from(1),
+			gas_limit: U256::from(0x100000),
+			action: ethereum::TransactionAction::Call(H160::from(bob.address)),
+			value: transfer_amount,
+			input: vec![],
+		}
+		.sign(&alice.private_key, Some(123));
+
+		let xx = RawOrigin::EthereumTransaction(alice.address);
+		let yy = Ethereum::transact(xx.into(), tx_signed);
+		println!("yy: {:?}", yy);
 	})
 }
