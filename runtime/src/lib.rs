@@ -66,7 +66,9 @@ pub use fp_evm::GenesisAccount;
 // A few exports that help ease life for downstream crates.
 pub use frame_support::{
 	construct_runtime, parameter_types,
-	traits::{ConstBool,ConstU128, ConstU32, ConstU8, KeyOwnerProofSystem, Randomness, StorageInfo},
+	traits::{
+		ConstBool, ConstU128, ConstU32, ConstU8, KeyOwnerProofSystem, Randomness, StorageInfo,
+	},
 	weights::{
 		constants::{BlockExecutionWeight, ExtrinsicBaseWeight, RocksDbWeight, WEIGHT_PER_SECOND},
 		IdentityFee, Weight,
@@ -336,8 +338,6 @@ impl pallet_evm::Config for Runtime {
 	type WeightInfo = ();
 }
 
-
-
 parameter_types! {
 	pub DefaultBaseFeePerGas: U256 = (1 * currency::GIGAWEI * currency::SUPPLY_FACTOR).into();
 }
@@ -596,6 +596,13 @@ impl_runtime_apis! {
 				None
 			};
 			let is_transactional = false;
+
+			let access_list = if let Some(t) = access_list {
+				t
+			} else {
+				Vec::new()
+			};
+
 			<Runtime as pallet_evm::Config>::Runner::call(
 				from,
 				to,
@@ -605,7 +612,7 @@ impl_runtime_apis! {
 				max_fee_per_gas,
 				max_priority_fee_per_gas,
 				nonce,
-				Vec::new(),
+				access_list,
 				is_transactional,
 				config.as_ref().unwrap_or(<Runtime as pallet_evm::Config>::config()),
 			).map_err(|err| err.error.into())
@@ -630,6 +637,12 @@ impl_runtime_apis! {
 				None
 			};
 			let is_transactional = false;
+
+			let access_list = if let Some(t) = access_list {
+				t
+			} else {
+				Vec::new()
+			};
 			#[allow(clippy::or_fun_call)] // suggestion not helpful here
 			<Runtime as pallet_evm::Config>::Runner::create(
 				from,
@@ -639,7 +652,7 @@ impl_runtime_apis! {
 				max_fee_per_gas,
 				max_priority_fee_per_gas,
 				nonce,
-				Vec::new(),
+				access_list,
 				is_transactional,
 				config.as_ref().unwrap_or(<Runtime as pallet_evm::Config>::config()),
 			).map_err(|err| err.error.into())
