@@ -55,6 +55,8 @@ fp-evm = { git = "https://github.com/purestake/frontier", branch = "moonbeam-pol
 pallet-evm = { git = "https://github.com/purestake/frontier", branch = "moonbeam-polkadot-v0.9.20", default-features = false }
 pallet-ethereum = { git = "https://github.com/purestake/frontier", branch = "moonbeam-polkadot-v0.9.20", default-features = false }
 fp-self-contained = { git = "https://github.com/purestake/frontier", branch = "moonbeam-polkadot-v0.9.20", default-features = false }
+fp-rpc = { git = "https://github.com/purestake/frontier", branch = "moonbeam-polkadot-v0.9.20", default-features = false }
+pallet-base-fee = { git = "https://github.com/purestake/frontier", branch = "moonbeam-polkadot-v0.9.20", default-features = false }
 
 
 
@@ -93,6 +95,8 @@ std = [
 	"pallet-evm/std",
 	"pallet-ethereum/std",
 	"fp-self-contained/std",
+	"fp-rpc/std",
+	"pallet-base-fee/std",
 ]
 runtime-benchmarks = [
 	"frame-benchmarking/runtime-benchmarks",

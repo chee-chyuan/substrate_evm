@@ -64,6 +64,9 @@ try-runtime-cli = { version = "0.10.0-dev", optional = true, git = "https://gith
 
 
 hex-literal = { version = "0.3.4"}
+fc-rpc = { git = "https://github.com/purestake/frontier", branch = "moonbeam-polkadot-v0.9.20", features = [ "rpc_binary_search_estimate" ] }
+sc-network = { git = "https://github.com/paritytech/substrate", branch = "polkadot-v0.9.20" }
+fp-rpc = { git = "https://github.com/purestake/frontier", branch = "moonbeam-polkadot-v0.9.20" }
 
 
 

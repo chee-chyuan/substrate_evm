@@ -26,7 +26,7 @@ use sp_version::RuntimeVersion;
 // A few exports that help ease life for downstream crates.
 pub use frame_support::{
 	construct_runtime, parameter_types,
-	traits::{ConstU128, ConstU32, ConstU8, KeyOwnerProofSystem, Randomness, StorageInfo},
+	traits::{ConstBool, ConstU128, ConstU32, ConstU8, KeyOwnerProofSystem, Randomness, StorageInfo},
 	weights::{
 		constants::{BlockExecutionWeight, ExtrinsicBaseWeight, RocksDbWeight, WEIGHT_PER_SECOND},
 		IdentityFee, Weight,
@@ -44,10 +44,36 @@ pub use sp_runtime::{
 	transaction_validity::TransactionValidityError,
 	Perbill, Permill,
 };
-use sp_core::{H160, U256};
+use sp_core::{H160, U256, H256,};
 
-use pallet_ethereum::EthereumBlockHashMapping;
-use pallet_evm::{EnsureAddressNever, EnsureAddressRoot, HashedAddressMapping};
+use pallet_ethereum::{EthereumBlockHashMapping, Transaction as EthereumTransaction, Call::{transact}};
+use pallet_evm::{EnsureAddressNever, EnsureAddressRoot, HashedAddressMapping, Runner, FeeCalculator, Account as EVMAccount};
+use fp_rpc::TransactionStatus;
+
+
+pub mod currency {
+	use super::Balance;
+
+	// Provide a common factor between runtimes based on a supply of 10_000_000 tokens.
+	pub const SUPPLY_FACTOR: Balance = 100;
+
+	pub const WEI: Balance = 1;
+	pub const KILOWEI: Balance = 1_000;
+	pub const MEGAWEI: Balance = 1_000_000;
+	pub const GIGAWEI: Balance = 1_000_000_000;
+	pub const MICROGLMR: Balance = 1_000_000_000_000;
+	pub const MILLIGLMR: Balance = 1_000_000_000_000_000;
+	pub const GLMR: Balance = 1_000_000_000_000_000_000;
+	pub const KILOGLMR: Balance = 1_000_000_000_000_000_000_000;
+
+	pub const TRANSACTION_BYTE_FEE: Balance = 1 * GIGAWEI * SUPPLY_FACTOR;
+	pub const STORAGE_BYTE_FEE: Balance = 100 * MICROGLMR * SUPPLY_FACTOR;
+	pub const WEIGHT_FEE: Balance = 100 * KILOWEI * SUPPLY_FACTOR;
+
+	pub const fn deposit(items: u32, bytes: u32) -> Balance {
+		items as Balance * 100 * MILLIGLMR * SUPPLY_FACTOR + (bytes as Balance) * STORAGE_BYTE_FEE
+	}
+}
 
 // pub use this so we can import it in the chain spec.
 #[cfg(feature = "std")]
@@ -313,6 +339,32 @@ impl pallet_ethereum::Config for Runtime {
 	type StateRoot = pallet_ethereum::IntermediateStateRoot<Self>;
 }
 
+parameter_types! {
+	pub DefaultBaseFeePerGas: U256 = (1 * currency::GIGAWEI * currency::SUPPLY_FACTOR).into();
+}
+
+pub struct BaseFeeThreshold;
+impl pallet_base_fee::BaseFeeThreshold for BaseFeeThreshold {
+	fn lower() -> Permill {
+		Permill::zero()
+	}
+	fn ideal() -> Permill {
+		Permill::from_parts(500_000)
+	}
+	fn upper() -> Permill {
+		Permill::from_parts(1_000_000)
+	}
+}
+
+impl pallet_base_fee::Config for Runtime {
+	type Event = Event;
+	type Threshold = BaseFeeThreshold;
+	// Tells `pallet_base_fee` whether to calculate a new BaseFee `on_finalize` or not.
+	type IsActive = ConstBool<false>;
+	type DefaultBaseFeePerGas = DefaultBaseFeePerGas;
+}
+
+
 // Create the runtime by composing the FRAME pallets that were previously configured.
 construct_runtime!(
 	pub enum Runtime where
@@ -332,6 +384,7 @@ construct_runtime!(
 		TemplateModule: pallet_template,
 		EVM: pallet_evm::{Pallet, Call, Storage, Config, Event<T>},
 		Ethereum: pallet_ethereum::{Pallet, Call, Storage, Config, Event, Origin},
+		BaseFee: pallet_base_fee::{Pallet, Call, Storage, Config<T>, Event},
 	}
 );
 
@@ -434,6 +487,166 @@ impl fp_self_contained::SelfContainedCall for Call {
 }
 
 impl_runtime_apis! {
+	impl fp_rpc::EthereumRuntimeRPCApi<Block> for Runtime {
+		fn chain_id() -> u64 {
+			<Runtime as pallet_evm::Config>::ChainId::get()
+		}
+
+		fn account_basic(address: H160) -> EVMAccount {
+			let (account, _) = EVM::account_basic(&address);
+			account
+		}
+
+		fn gas_price() -> U256 {
+			let (gas_price, _) = <Runtime as pallet_evm::Config>::FeeCalculator::min_gas_price();
+			gas_price
+		}
+
+		fn account_code_at(address: H160) -> Vec<u8> {
+			EVM::account_codes(address)
+		}
+
+		fn author() -> H160 {
+			<pallet_evm::Pallet<Runtime>>::find_author()
+		}
+
+		fn storage_at(address: H160, index: U256) -> H256 {
+			let mut tmp = [0u8; 32];
+			index.to_big_endian(&mut tmp);
+			EVM::account_storages(address, H256::from_slice(&tmp[..]))
+		}
+
+		fn call(
+			from: H160,
+			to: H160,
+			data: Vec<u8>,
+			value: U256,
+			gas_limit: U256,
+			max_fee_per_gas: Option<U256>,
+			max_priority_fee_per_gas: Option<U256>,
+			nonce: Option<U256>,
+			estimate: bool,
+			access_list: Option<Vec<(H160, Vec<H256>)>>,
+		) -> Result<pallet_evm::CallInfo, sp_runtime::DispatchError> {
+			let config = if estimate {
+				let mut config = <Runtime as pallet_evm::Config>::config().clone();
+				config.estimate = true;
+				Some(config)
+			} else {
+				None
+			};
+			let is_transactional = false;
+
+			let access_list = if let Some(t) = access_list {
+				t
+			} else {
+				Vec::new()
+			};
+
+			<Runtime as pallet_evm::Config>::Runner::call(
+				from,
+				to,
+				data,
+				value,
+				gas_limit.low_u64(),
+				max_fee_per_gas,
+				max_priority_fee_per_gas,
+				nonce,
+				access_list,
+				is_transactional,
+				config.as_ref().unwrap_or(<Runtime as pallet_evm::Config>::config()),
+			).map_err(|err| err.error.into())
+		}
+
+		fn create(
+			from: H160,
+			data: Vec<u8>,
+			value: U256,
+			gas_limit: U256,
+			max_fee_per_gas: Option<U256>,
+			max_priority_fee_per_gas: Option<U256>,
+			nonce: Option<U256>,
+			estimate: bool,
+			access_list: Option<Vec<(H160, Vec<H256>)>>,
+		) -> Result<pallet_evm::CreateInfo, sp_runtime::DispatchError> {
+			let config = if estimate {
+				let mut config = <Runtime as pallet_evm::Config>::config().clone();
+				config.estimate = true;
+				Some(config)
+			} else {
+				None
+			};
+			let is_transactional = false;
+
+			let access_list = if let Some(t) = access_list {
+				t
+			} else {
+				Vec::new()
+			};
+			#[allow(clippy::or_fun_call)] // suggestion not helpful here
+			<Runtime as pallet_evm::Config>::Runner::create(
+				from,
+				data,
+				value,
+				gas_limit.low_u64(),
+				max_fee_per_gas,
+				max_priority_fee_per_gas,
+				nonce,
+				access_list,
+				is_transactional,
+				config.as_ref().unwrap_or(<Runtime as pallet_evm::Config>::config()),
+			).map_err(|err| err.error.into())
+		}
+
+		fn current_transaction_statuses() -> Option<Vec<TransactionStatus>> {
+			Ethereum::current_transaction_statuses()
+		}
+
+		fn current_block() -> Option<pallet_ethereum::Block> {
+			Ethereum::current_block()
+		}
+
+		fn current_receipts() -> Option<Vec<pallet_ethereum::Receipt>> {
+			Ethereum::current_receipts()
+		}
+
+		fn current_all() -> (
+			Option<pallet_ethereum::Block>,
+			Option<Vec<pallet_ethereum::Receipt>>,
+			Option<Vec<TransactionStatus>>,
+		) {
+			(
+				Ethereum::current_block(),
+				Ethereum::current_receipts(),
+				Ethereum::current_transaction_statuses(),
+			)
+		}
+
+		fn extrinsic_filter(
+			xts: Vec<<Block as BlockT>::Extrinsic>,
+		) -> Vec<EthereumTransaction> {
+			xts.into_iter().filter_map(|xt| match xt.0.function {
+				Call::Ethereum(transact { transaction }) => Some(transaction),
+				_ => None
+			}).collect::<Vec<EthereumTransaction>>()
+		}
+
+		fn elasticity() -> Option<Permill> {
+			Some(BaseFee::elasticity())
+		}
+	}
+
+	// impl fp_rpc::ConvertTransactionRuntimeApi<Block> for Runtime {
+	// 	fn convert_transaction(
+	// 		transaction: pallet_ethereum::Transaction
+	// 	) -> <Block as BlockT>::Extrinsic {
+	// 		UncheckedExtrinsic::new_unsigned(
+	// 			pallet_ethereum::Call::<Runtime>::transact { transaction }.into(),
+	// 		)
+	// 	}
+	// }
+
+
 	impl sp_api::Core<Block> for Runtime {
 		fn version() -> RuntimeVersion {
 			VERSION

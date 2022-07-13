@@ -7,12 +7,15 @@
 
 use std::sync::Arc;
 
-use node_template_runtime::{opaque::Block, AccountId, Balance, Index};
+use node_template_runtime::{opaque::Block, AccountId, Balance, Index, Hash};
 pub use sc_rpc_api::DenyUnsafe;
 use sc_transaction_pool_api::TransactionPool;
 use sp_api::ProvideRuntimeApi;
 use sp_block_builder::BlockBuilder;
 use sp_blockchain::{Error as BlockChainError, HeaderBackend, HeaderMetadata};
+
+use sc_network::NetworkService;
+use fc_rpc::{NetApi, Net};
 
 /// Full client dependencies.
 pub struct FullDeps<C, P> {
@@ -22,6 +25,8 @@ pub struct FullDeps<C, P> {
 	pub pool: Arc<P>,
 	/// Whether to deny unsafe calls
 	pub deny_unsafe: DenyUnsafe,
+	/// Network instance
+	pub network: Arc<NetworkService<Block, Hash>>,
 }
 
 /// Instantiate all full RPC extensions.
@@ -33,13 +38,14 @@ where
 	C::Api: substrate_frame_rpc_system::AccountNonceApi<Block, AccountId, Index>,
 	C::Api: pallet_transaction_payment_rpc::TransactionPaymentRuntimeApi<Block, Balance>,
 	C::Api: BlockBuilder<Block>,
+	C::Api: fp_rpc::EthereumRuntimeRPCApi<Block>,
 	P: TransactionPool + 'static,
 {
 	use pallet_transaction_payment_rpc::{TransactionPayment, TransactionPaymentApi};
 	use substrate_frame_rpc_system::{FullSystem, SystemApi};
 
 	let mut io = jsonrpc_core::IoHandler::default();
-	let FullDeps { client, pool, deny_unsafe } = deps;
+	let FullDeps { client, pool, deny_unsafe, network } = deps;
 
 	io.extend_with(SystemApi::to_delegate(FullSystem::new(client.clone(), pool, deny_unsafe)));
 
@@ -49,6 +55,13 @@ where
 	// `YourRpcStruct` should have a reference to a client, which is needed
 	// to call into the runtime.
 	// `io.extend_with(YourRpcTrait::to_delegate(YourRpcStruct::new(ReferenceToClient, ...)));`
+
+	io.extend_with(NetApi::to_delegate(Net::new(
+		client.clone(),
+		network.clone(),
+		true,
+	)));
+	
 
 	io
 }
