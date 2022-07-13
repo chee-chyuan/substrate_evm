@@ -10,6 +10,8 @@ use sc_cli::{ChainSpec, RuntimeVersion, SubstrateCli};
 use sc_service::PartialComponents;
 use std::sync::Arc;
 
+use cli_opt::RpcConfig;
+
 impl SubstrateCli for Cli {
 	fn impl_name() -> String {
 		"Substrate Node".into()
@@ -165,7 +167,20 @@ pub fn run() -> sc_cli::Result<()> {
 		None => {
 			let runner = cli.create_runner(&cli.run)?;
 			runner.run_node_until_exit(|config| async move {
-				service::new_full(config).map_err(sc_cli::Error::Service)
+				let rpc_config = RpcConfig {
+					ethapi: cli.run_eth.ethapi,
+					ethapi_max_permits: cli.run_eth.ethapi_max_permits,
+					ethapi_trace_max_count: cli.run_eth.ethapi_trace_max_count,
+					ethapi_trace_cache_duration: cli.run_eth.ethapi_trace_cache_duration,
+					eth_log_block_cache: cli.run_eth.eth_log_block_cache,
+					eth_statuses_cache: cli.run_eth.eth_statuses_cache,
+					fee_history_limit: cli.run_eth.fee_history_limit,
+					max_past_logs: cli.run_eth.max_past_logs,
+					relay_chain_rpc_url: None,  // cli.run.base.relay_chain_rpc_url,  //ignore relay chain stuff now
+					tracing_raw_max_memory_usage: cli.run_eth.tracing_raw_max_memory_usage,
+				};
+
+				service::new_full(config, rpc_config).map_err(sc_cli::Error::Service)
 			})
 		},
 	}

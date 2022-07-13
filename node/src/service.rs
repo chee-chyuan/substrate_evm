@@ -6,10 +6,13 @@ use sc_consensus_aura::{ImportQueueParams, SlotProportion, StartAuraParams};
 pub use sc_executor::NativeElseWasmExecutor;
 use sc_finality_grandpa::SharedVoterState;
 use sc_keystore::LocalKeystore;
-use sc_service::{error::Error as ServiceError, Configuration, TaskManager};
+use sc_service::{error::Error as ServiceError, config::BasePath, Configuration, TaskManager};
 use sc_telemetry::{Telemetry, TelemetryWorker};
 use sp_consensus_aura::sr25519::AuthorityPair as AuraPair;
-use std::{sync::Arc, time::Duration};
+use std::{sync::{Arc, Mutex}, time::Duration, collections::BTreeMap};
+use fc_rpc_core::types::FeeHistoryCache;
+use fc_db::DatabaseSource;
+use cli_opt::RpcConfig;
 
 // Our native executor instance.
 pub struct ExecutorDispatch;
@@ -36,6 +39,45 @@ pub(crate) type FullClient =
 type FullBackend = sc_service::TFullBackend<Block>;
 type FullSelectChain = sc_consensus::LongestChain<FullBackend, Block>;
 
+
+pub fn frontier_database_dir(config: &Configuration, path: &str) -> std::path::PathBuf {
+	let config_dir = config
+		.base_path
+		.as_ref()
+		.map(|base_path| base_path.config_dir(config.chain_spec.id()))
+		.unwrap_or_else(|| {
+			BasePath::from_project("", "", "node-template").config_dir(config.chain_spec.id())
+		});
+	config_dir.join("frontier").join(path)
+}
+
+// TODO This is copied from frontier. It should be imported instead after
+// https://github.com/paritytech/frontier/issues/333 is solved
+pub fn open_frontier_backend(config: &Configuration) -> Result<Arc<fc_db::Backend<Block>>, String> {
+	Ok(Arc::new(fc_db::Backend::<Block>::new(
+		&fc_db::DatabaseSettings {
+			source: match config.database {
+				DatabaseSource::RocksDb { .. } => DatabaseSource::RocksDb {
+					path: frontier_database_dir(config, "db"),
+					cache_size: 0,
+				},
+				DatabaseSource::ParityDb { .. } => DatabaseSource::ParityDb {
+					path: frontier_database_dir(config, "paritydb"),
+				},
+				DatabaseSource::Auto { .. } => DatabaseSource::Auto {
+					rocksdb_path: frontier_database_dir(config, "db"),
+					paritydb_path: frontier_database_dir(config, "paritydb"),
+					cache_size: 0,
+				},
+				_ => {
+					return Err("Supported db sources: `rocksdb` | `paritydb` | `auto`".to_string())
+				}
+			},
+		},
+	)?))
+}
+
+
 pub fn new_partial(
 	config: &Configuration,
 ) -> Result<
@@ -54,6 +96,8 @@ pub fn new_partial(
 			>,
 			sc_finality_grandpa::LinkHalf<Block, FullClient, FullSelectChain>,
 			Option<Telemetry>,
+			Arc<fc_db::Backend<Block>>,
+			FeeHistoryCache,
 		),
 	>,
 	ServiceError,
@@ -112,6 +156,10 @@ pub fn new_partial(
 
 	let slot_duration = sc_consensus_aura::slot_duration(&*client)?;
 
+	let fee_history_cache: FeeHistoryCache = Arc::new(Mutex::new(BTreeMap::new()));
+
+	let frontier_backend = open_frontier_backend(config)?;
+
 	let import_queue =
 		sc_consensus_aura::import_queue::<AuraPair, _, _, _, _, _, _>(ImportQueueParams {
 			block_import: grandpa_block_import.clone(),
@@ -145,7 +193,8 @@ pub fn new_partial(
 		keystore_container,
 		select_chain,
 		transaction_pool,
-		other: (grandpa_block_import, grandpa_link, telemetry),
+		other: (grandpa_block_import, grandpa_link, telemetry, frontier_backend,fee_history_cache),
+		
 	})
 }
 
@@ -157,7 +206,7 @@ fn remote_keystore(_url: &String) -> Result<Arc<LocalKeystore>, &'static str> {
 }
 
 /// Builds a new service for a full client.
-pub fn new_full(mut config: Configuration) -> Result<TaskManager, ServiceError> {
+pub fn new_full(mut config: Configuration, rpc_config: RpcConfig) -> Result<TaskManager, ServiceError> {
 	let sc_service::PartialComponents {
 		client,
 		backend,
@@ -166,7 +215,7 @@ pub fn new_full(mut config: Configuration) -> Result<TaskManager, ServiceError> 
 		mut keystore_container,
 		select_chain,
 		transaction_pool,
-		other: (block_import, grandpa_link, mut telemetry),
+		other: (block_import, grandpa_link, mut telemetry, frontier_backend, fee_history_cache),
 	} = new_partial(&config)?;
 
 	if let Some(url) = &config.keystore_remote {
@@ -221,13 +270,42 @@ pub fn new_full(mut config: Configuration) -> Result<TaskManager, ServiceError> 
 	let enable_grandpa = !config.disable_grandpa;
 	let prometheus_registry = config.prometheus_registry().cloned();
 
+	let overrides = crate::rpc::overrides_handle(client.clone());
+
+	let fee_history_limit = rpc_config.fee_history_limit;
+
+	let block_data_cache = Arc::new(fc_rpc::EthBlockDataCacheTask::new(
+		task_manager.spawn_handle(),
+		overrides.clone(),
+		rpc_config.eth_log_block_cache,
+		rpc_config.eth_statuses_cache,
+		prometheus_registry.clone(),
+	));
+
 	let rpc_extensions_builder = {
 		let client = client.clone();
 		let pool = transaction_pool.clone();
+		let network = network.clone();
+		let overrides = overrides.clone();
+		let fee_history_cache = fee_history_cache.clone();
+		let block_data_cache = block_data_cache.clone();
+		let frontier_backend = frontier_backend.clone();
 
 		Box::new(move |deny_unsafe, _| {
 			let deps =
-				crate::rpc::FullDeps { client: client.clone(), pool: pool.clone(), deny_unsafe };
+				crate::rpc::FullDeps { 
+					client: client.clone(), 
+					pool: pool.clone(), 
+					graph: pool.pool().clone(),
+					deny_unsafe, 
+					network: network.clone(), 
+					is_authority: true, // hardcode to true first
+					fee_history_limit,
+					frontier_backend: frontier_backend.clone(), 
+					fee_history_cache:fee_history_cache.clone(),
+					block_data_cache: block_data_cache.clone(),
+					overrides: overrides.clone(),
+				};
 
 			Ok(crate::rpc::create_full(deps))
 		})
