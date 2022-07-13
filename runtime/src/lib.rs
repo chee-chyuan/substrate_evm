@@ -49,6 +49,7 @@ use sp_core::{H160, U256, H256,};
 use pallet_ethereum::{EthereumBlockHashMapping, Transaction as EthereumTransaction, Call::{transact}};
 use pallet_evm::{EnsureAddressNever, EnsureAddressRoot, HashedAddressMapping, Runner, FeeCalculator, Account as EVMAccount};
 use fp_rpc::TransactionStatus;
+use codec::{Decode, Encode, MaxEncodedLen};
 
 
 pub mod currency {
@@ -168,6 +169,30 @@ pub fn native_version() -> NativeVersion {
 }
 
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
+
+pub struct TransactionConverter;
+
+impl fp_rpc::ConvertTransaction<UncheckedExtrinsic> for TransactionConverter {
+	fn convert_transaction(&self, transaction: pallet_ethereum::Transaction) -> UncheckedExtrinsic {
+		UncheckedExtrinsic::new_unsigned(
+			pallet_ethereum::Call::<Runtime>::transact { transaction }.into(),
+		)
+	}
+}
+
+impl fp_rpc::ConvertTransaction<opaque::UncheckedExtrinsic> for TransactionConverter {
+	fn convert_transaction(
+		&self,
+		transaction: pallet_ethereum::Transaction,
+	) -> opaque::UncheckedExtrinsic {
+		let extrinsic = UncheckedExtrinsic::new_unsigned(
+			pallet_ethereum::Call::<Runtime>::transact { transaction }.into(),
+		);
+		let encoded = extrinsic.encode();
+		opaque::UncheckedExtrinsic::decode(&mut &encoded[..])
+			.expect("Encoded extrinsic is always valid")
+	}
+}
 
 parameter_types! {
 	pub const Version: RuntimeVersion = VERSION;
