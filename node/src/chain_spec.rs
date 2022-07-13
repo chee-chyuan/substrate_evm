@@ -157,7 +157,7 @@ fn testnet_genesis(
 				// Prefund the "Gerald" account
 				let mut accounts = std::collections::BTreeMap::new();
 				accounts.insert(
-					H160::from_slice(&hex_literal::hex!("6Be02d1d3665660d22FF9624b7BE0551ee1Ac91b")),
+					H160::from_slice(&hex_literal::hex!("5261ad65cec0708D0E485507C12F8aEA7218763f")),
 					GenesisAccount{
 						nonce: U256::zero(),
 						// Using a larger number, so I can tell the accounts apart by balance.
