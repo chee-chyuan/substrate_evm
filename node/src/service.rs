@@ -1,16 +1,27 @@
 //! Service and ServiceFactory implementation. Specialized wrapper over substrate service.
 
-use node_template_runtime::{self, opaque::Block, RuntimeApi};
+use fc_rpc_core::types::{FeeHistoryCache, FilterPool};
+use node_template_runtime::{self, opaque::Block};
 use sc_client_api::{BlockBackend, ExecutorProvider};
 use sc_consensus_aura::{ImportQueueParams, SlotProportion, StartAuraParams};
 pub use sc_executor::NativeElseWasmExecutor;
 use sc_finality_grandpa::SharedVoterState;
 use sc_keystore::LocalKeystore;
-use sc_service::{error::Error as ServiceError, Configuration, TaskManager};
+use sc_service::{error::Error as ServiceError, BasePath, Configuration, TaskManager};
 use sc_telemetry::{Telemetry, TelemetryWorker};
+use sp_api::ConstructRuntimeApi;
 use sp_consensus_aura::sr25519::AuthorityPair as AuraPair;
-use std::{sync::Arc, time::Duration};
+use std::{
+	collections::BTreeMap,
+	sync::{Arc, Mutex},
+	time::Duration,
+};
 
+use sc_executor::{ NativeExecutionDispatch };
+use crate::client_service::RuntimeApiCollection;
+use crate::rpc_service;
+use cli_opt::RpcConfig;
+use fc_db::DatabaseSource;
 // Our native executor instance.
 pub struct ExecutorDispatch;
 
@@ -31,35 +42,77 @@ impl sc_executor::NativeExecutionDispatch for ExecutorDispatch {
 	}
 }
 
-pub(crate) type FullClient =
-	sc_service::TFullClient<Block, RuntimeApi, NativeElseWasmExecutor<ExecutorDispatch>>;
+pub(crate) type FullClient<RuntimeApi, Executor> =
+	sc_service::TFullClient<Block, RuntimeApi, NativeElseWasmExecutor<Executor>>;
 type FullBackend = sc_service::TFullBackend<Block>;
 type FullSelectChain = sc_consensus::LongestChain<FullBackend, Block>;
 
-pub fn new_partial(
+pub fn frontier_database_dir(config: &Configuration, path: &str) -> std::path::PathBuf {
+	let config_dir = config
+		.base_path
+		.as_ref()
+		.map(|base_path| base_path.config_dir(config.chain_spec.id()))
+		.unwrap_or_else(|| {
+			BasePath::from_project("", "", "node-template").config_dir(config.chain_spec.id())
+		});
+	config_dir.join("frontier").join(path)
+}
+
+// TODO This is copied from frontier. It should be imported instead after
+// https://github.com/paritytech/frontier/issues/333 is solved
+pub fn open_frontier_backend(config: &Configuration) -> Result<Arc<fc_db::Backend<Block>>, String> {
+	Ok(Arc::new(fc_db::Backend::<Block>::new(&fc_db::DatabaseSettings {
+		source: match config.database {
+			DatabaseSource::RocksDb { .. } => {
+				DatabaseSource::RocksDb { path: frontier_database_dir(config, "db"), cache_size: 0 }
+			},
+			DatabaseSource::ParityDb { .. } => {
+				DatabaseSource::ParityDb { path: frontier_database_dir(config, "paritydb") }
+			},
+			DatabaseSource::Auto { .. } => DatabaseSource::Auto {
+				rocksdb_path: frontier_database_dir(config, "db"),
+				paritydb_path: frontier_database_dir(config, "paritydb"),
+				cache_size: 0,
+			},
+			_ => return Err("Supported db sources: `rocksdb` | `paritydb` | `auto`".to_string()),
+		},
+	})?))
+}
+
+pub fn new_partial<RuntimeApi, Executor>(
 	config: &Configuration,
 ) -> Result<
 	sc_service::PartialComponents<
-		FullClient,
+		FullClient<RuntimeApi, Executor>,
 		FullBackend,
 		FullSelectChain,
-		sc_consensus::DefaultImportQueue<Block, FullClient>,
-		sc_transaction_pool::FullPool<Block, FullClient>,
+		sc_consensus::DefaultImportQueue<Block, FullClient<RuntimeApi, Executor>>,
+		sc_transaction_pool::FullPool<Block, FullClient<RuntimeApi, Executor>>,
 		(
 			sc_finality_grandpa::GrandpaBlockImport<
 				FullBackend,
 				Block,
-				FullClient,
+				FullClient<RuntimeApi, Executor>,
 				FullSelectChain,
 			>,
-			sc_finality_grandpa::LinkHalf<Block, FullClient, FullSelectChain>,
+			sc_finality_grandpa::LinkHalf<Block, FullClient<RuntimeApi, Executor>, FullSelectChain>,
+			Option<FilterPool>,
 			Option<Telemetry>,
+			Arc<fc_db::Backend<Block>>,
+			FeeHistoryCache,
 		),
 	>,
 	ServiceError,
-> {
+>
+where
+	RuntimeApi:
+		ConstructRuntimeApi<Block, FullClient<RuntimeApi, Executor>> + Send + Sync + 'static,
+	RuntimeApi::RuntimeApi:
+		RuntimeApiCollection<StateBackend = sc_client_api::StateBackendFor<FullBackend, Block>>,
+	Executor: NativeExecutionDispatch + 'static,
+{
 	if config.keystore_remote.is_some() {
-		return Err(ServiceError::Other("Remote Keystores are not supported.".into()))
+		return Err(ServiceError::Other("Remote Keystores are not supported.".into()));
 	}
 
 	let telemetry = config
@@ -112,6 +165,8 @@ pub fn new_partial(
 
 	let slot_duration = sc_consensus_aura::slot_duration(&*client)?;
 
+	let frontier_backend = open_frontier_backend(config)?;
+
 	let import_queue =
 		sc_consensus_aura::import_queue::<AuraPair, _, _, _, _, _, _>(ImportQueueParams {
 			block_import: grandpa_block_import.clone(),
@@ -137,6 +192,9 @@ pub fn new_partial(
 			telemetry: telemetry.as_ref().map(|x| x.handle()),
 		})?;
 
+	let filter_pool: Option<FilterPool> = Some(Arc::new(Mutex::new(BTreeMap::new())));
+	let fee_history_cache: FeeHistoryCache = Arc::new(Mutex::new(BTreeMap::new()));
+
 	Ok(sc_service::PartialComponents {
 		client,
 		backend,
@@ -145,7 +203,14 @@ pub fn new_partial(
 		keystore_container,
 		select_chain,
 		transaction_pool,
-		other: (grandpa_block_import, grandpa_link, telemetry),
+		other: (
+			grandpa_block_import,
+			grandpa_link,
+			filter_pool,
+			telemetry,
+			frontier_backend,
+			fee_history_cache,
+		),
 	})
 }
 
@@ -157,7 +222,17 @@ fn remote_keystore(_url: &String) -> Result<Arc<LocalKeystore>, &'static str> {
 }
 
 /// Builds a new service for a full client.
-pub fn new_full(mut config: Configuration) -> Result<TaskManager, ServiceError> {
+pub fn new_full<RuntimeApi, Executor>(
+	mut config: Configuration,
+	rpc_config: RpcConfig,
+) -> Result<TaskManager, ServiceError> 
+where
+	RuntimeApi:
+		ConstructRuntimeApi<Block, FullClient<RuntimeApi, Executor>> + Send + Sync + 'static,
+	RuntimeApi::RuntimeApi:
+		RuntimeApiCollection<StateBackend = sc_client_api::StateBackendFor<FullBackend, Block>>,
+	Executor: NativeExecutionDispatch + 'static,
+	{
 	let sc_service::PartialComponents {
 		client,
 		backend,
@@ -166,17 +241,26 @@ pub fn new_full(mut config: Configuration) -> Result<TaskManager, ServiceError> 
 		mut keystore_container,
 		select_chain,
 		transaction_pool,
-		other: (block_import, grandpa_link, mut telemetry),
-	} = new_partial(&config)?;
+		other:
+			(
+				block_import,
+				grandpa_link,
+				filter_pool,
+				mut telemetry,
+				frontier_backend,
+				fee_history_cache,
+			),
+	} = new_partial::<RuntimeApi, Executor>(&config)?;
 
 	if let Some(url) = &config.keystore_remote {
 		match remote_keystore(url) {
 			Ok(k) => keystore_container.set_remote_keystore(k),
-			Err(e) =>
+			Err(e) => {
 				return Err(ServiceError::Other(format!(
 					"Error hooking up remote keystore for {}: {}",
 					url, e
-				))),
+				)))
+			},
 		};
 	}
 	let grandpa_protocol_name = sc_finality_grandpa::protocol_standard_name(
@@ -227,25 +311,43 @@ pub fn new_full(mut config: Configuration) -> Result<TaskManager, ServiceError> 
 		let network = network.clone();
 
 		Box::new(move |deny_unsafe, _| {
-			let deps =
-				crate::rpc::FullDeps { client: client.clone(), pool: pool.clone(), deny_unsafe, network: network.clone() };
+			let deps = crate::rpc::FullDeps {
+				client: client.clone(),
+				pool: pool.clone(),
+				deny_unsafe,
+				network: network.clone(),
+			};
 
 			Ok(crate::rpc::create_full(deps))
 		})
 	};
 
-	let _rpc_handlers = sc_service::spawn_tasks(sc_service::SpawnTasksParams {
-		network: network.clone(),
+	// let _rpc_handlers = sc_service::spawn_tasks(sc_service::SpawnTasksParams { // STOP here, moonbeam uses a custom spawnTasksParams
+	// 	network: network.clone(),
+	// 	client: client.clone(),
+	// 	keystore: keystore_container.sync_keystore(),
+	// 	task_manager: &mut task_manager,
+	// 	transaction_pool: transaction_pool.clone(),
+	// 	rpc_extensions_builder,
+	// 	backend,
+	// 	system_rpc_tx,
+	// 	config,
+	// 	telemetry: telemetry.as_mut(),
+	// })?;
+
+	let overrides = rpc_service::overrides_handle(client.clone());
+	let fee_history_limit = rpc_config.fee_history_limit;
+
+	rpc_service::spawn_essential_tasks(rpc_service::SpawnTasksParams {
+		task_manager: &task_manager,
 		client: client.clone(),
-		keystore: keystore_container.sync_keystore(),
-		task_manager: &mut task_manager,
-		transaction_pool: transaction_pool.clone(),
-		rpc_extensions_builder,
-		backend,
-		system_rpc_tx,
-		config,
-		telemetry: telemetry.as_mut(),
-	})?;
+		substrate_backend: backend.clone(),
+		frontier_backend: frontier_backend.clone(),
+		filter_pool: filter_pool.clone(),
+		overrides: overrides.clone(),
+		fee_history_limit,
+		fee_history_cache: fee_history_cache.clone(),
+	});
 
 	if role.is_authority() {
 		let proposer_factory = sc_basic_authorship::ProposerFactory::new(

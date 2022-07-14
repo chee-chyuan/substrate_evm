@@ -3,6 +3,8 @@ members = [
     "node",
     "pallets/template",
     "runtime",
+    "primitive/rpc/debug",
+    "primitive/rpc/txpool",
 ]
 [profile.release]
 panic = "unwind"

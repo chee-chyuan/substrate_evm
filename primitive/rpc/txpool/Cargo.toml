@@ -1,0 +1,26 @@
+[package]
+name = "primitive-txpool"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+ethereum = { version = "0.12.0", default-features = false, features = [ "with-codec" ] }
+
+# Substrate
+codec = { package = "parity-scale-codec", version = "3.0.0", default-features = false }
+sp-api = { git = "https://github.com/paritytech/substrate", branch = "polkadot-v0.9.20", default-features = false }
+sp-io = { git = "https://github.com/paritytech/substrate", branch = "polkadot-v0.9.20", default-features = false }
+sp-runtime = { git = "https://github.com/paritytech/substrate", branch = "polkadot-v0.9.20", default-features = false }
+sp-std = { git = "https://github.com/paritytech/substrate", branch = "polkadot-v0.9.20", default-features = false }
+
+[features]
+default = [ "std" ]
+std = [
+	"ethereum/std",
+	"sp-api/std",
+	"sp-io/std",
+	"sp-runtime/std",
+	"sp-std/std",
+]
