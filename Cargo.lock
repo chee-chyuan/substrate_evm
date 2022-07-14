@@ -1562,6 +1562,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "fc-mapping-sync"
+version = "2.0.0-dev"
+source = "git+https://github.com/purestake/frontier?branch=moonbeam-polkadot-v0.9.20#652abf16eb99435c37895ff2517f7deec6b6b0ca"
+dependencies = [
+ "fc-db",
+ "fp-consensus",
+ "fp-rpc",
+ "futures 0.3.21",
+ "futures-timer",
+ "log",
+ "sc-client-api",
+ "sp-api",
+ "sp-blockchain",
+ "sp-runtime",
+]
+
+[[package]]
 name = "fc-rpc"
 version = "2.0.0-dev"
 source = "git+https://github.com/purestake/frontier?branch=moonbeam-polkadot-v0.9.20#652abf16eb99435c37895ff2517f7deec6b6b0ca"
@@ -4018,11 +4035,14 @@ name = "node-template"
 version = "4.0.0-dev"
 dependencies = [
  "clap",
+ "fc-db",
+ "fc-mapping-sync",
  "fc-rpc",
  "fp-rpc",
  "frame-benchmarking",
  "frame-benchmarking-cli",
  "frame-system",
+ "futures 0.3.21",
  "hex-literal",
  "jsonrpc-core",
  "node-template-runtime",
