@@ -11,7 +11,7 @@ use pallet_grandpa::{
 };
 use sp_api::impl_runtime_apis;
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
-use sp_core::{crypto::KeyTypeId, OpaqueMetadata};
+use sp_core::{crypto::KeyTypeId, OpaqueMetadata, U256};
 use sp_runtime::{
 	create_runtime_str, generic, impl_opaque_keys,
 	traits::{AccountIdLookup, BlakeTwo256, Block as BlockT, IdentifyAccount, NumberFor, Verify},
@@ -43,6 +43,8 @@ pub use sp_runtime::{Perbill, Permill};
 
 /// Import the template pallet.
 pub use pallet_template;
+
+use pallet_evm::{HashedAddressMapping, EnsureAddressTruncated, GasWeightMapping};
 
 /// An index to a block.
 pub type BlockNumber = u32;
@@ -130,6 +132,9 @@ pub fn native_version() -> NativeVersion {
 }
 
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
+
+pub const MAXIMUM_BLOCK_WEIGHT: Weight = 2 * WEIGHT_PER_SECOND;
+const WEIGHT_PER_GAS: u64 = 20_000;
 
 parameter_types! {
 	pub const Version: RuntimeVersion = VERSION;
@@ -268,6 +273,73 @@ impl pallet_template::Config for Runtime {
 	type Event = Event;
 }
 
+
+pub struct FixedGasWeightMapping;
+impl GasWeightMapping for FixedGasWeightMapping {
+	fn gas_to_weight(gas: u64) -> Weight {
+		gas.saturating_mul(WEIGHT_PER_GAS)
+	}
+	fn weight_to_gas(weight: Weight) -> u64 {
+		weight.wrapping_div(WEIGHT_PER_GAS)
+	}
+}
+
+parameter_types! {
+	pub const ChainId: u64 = 42;
+	pub BlockGasLimit: U256 = U256::from(NORMAL_DISPATCH_RATIO * MAXIMUM_BLOCK_WEIGHT / WEIGHT_PER_GAS);
+	// pub PrecompilesValue: FrontierPrecompiles<Runtime> = FrontierPrecompiles::<_>::new();
+}
+
+impl pallet_evm::Config for Runtime {
+	type FeeCalculator = BaseFee;
+	type GasWeightMapping = FixedGasWeightMapping;
+	type BlockHashMapping = pallet_ethereum::EthereumBlockHashMapping<Self>;
+	type CallOrigin = EnsureAddressTruncated;
+	type WithdrawOrigin = EnsureAddressTruncated;
+	type AddressMapping = HashedAddressMapping<BlakeTwo256>;
+	type Currency = Balances;
+	type Event = Event;
+	type Runner = pallet_evm::runner::stack::Runner<Self>;
+	type PrecompilesType = (); // FrontierPrecompiles<Self>;
+	type PrecompilesValue = (); // PrecompilesValue;
+	type ChainId = ChainId;
+	type BlockGasLimit = BlockGasLimit;
+	type OnChargeTransaction = ();
+	type FindAuthor = ();  // FindAuthorTruncated<Aura>;
+	type WeightInfo = pallet_evm::weights::SubstrateWeight<Self>;
+}
+
+impl pallet_ethereum::Config for Runtime {
+	type Event = Event;
+	type StateRoot = pallet_ethereum::IntermediateStateRoot<Self>;
+}
+
+
+frame_support::parameter_types! {
+	pub IsActive: bool = true;
+	pub DefaultBaseFeePerGas: U256 = U256::from(1_000_000_000);
+}
+
+pub struct BaseFeeThreshold;
+impl pallet_base_fee::BaseFeeThreshold for BaseFeeThreshold {
+	fn lower() -> Permill {
+		Permill::zero()
+	}
+	fn ideal() -> Permill {
+		Permill::from_parts(500_000)
+	}
+	fn upper() -> Permill {
+		Permill::from_parts(1_000_000)
+	}
+}
+
+impl pallet_base_fee::Config for Runtime {
+	type Event = Event;
+	type Threshold = BaseFeeThreshold;
+	type IsActive = IsActive;
+	type DefaultBaseFeePerGas = DefaultBaseFeePerGas;
+}
+
 // Create the runtime by composing the FRAME pallets that were previously configured.
 construct_runtime!(
 	pub enum Runtime where
@@ -285,6 +357,10 @@ construct_runtime!(
 		Sudo: pallet_sudo,
 		// Include the custom logic from the pallet-template in the runtime.
 		TemplateModule: pallet_template,
+
+		Ethereum: pallet_ethereum::{Pallet, Call, Storage, Event, Config, Origin},
+		EVM: pallet_evm::{Pallet, Config, Call, Storage, Event<T>},
+		BaseFee: pallet_base_fee::{Pallet, Call, Storage, Config<T>, Event},
 	}
 );
 
