@@ -3973,6 +3973,7 @@ name = "node-template-runtime"
 version = "4.0.0-dev"
 dependencies = [
  "fp-rpc",
+ "fp-self-contained",
  "frame-benchmarking",
  "frame-executive",
  "frame-support",
