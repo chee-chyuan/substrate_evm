@@ -65,11 +65,13 @@ try-runtime-cli = { version = "0.10.0-dev", optional = true, git = "https://gith
 
 hex-literal = { version = "0.3.4"}
 fc-rpc = { git = "https://github.com/purestake/frontier", branch = "moonbeam-polkadot-v0.9.20", features = [ "rpc_binary_search_estimate" ] }
+fc-rpc-core = { git = "https://github.com/purestake/frontier", branch = "moonbeam-polkadot-v0.9.20" }
 sc-network = { git = "https://github.com/paritytech/substrate", branch = "polkadot-v0.9.20" }
 fp-rpc = { git = "https://github.com/purestake/frontier", branch = "moonbeam-polkadot-v0.9.20" }
 fc-db = { git = "https://github.com/purestake/frontier", branch = "moonbeam-polkadot-v0.9.20" }
 fc-mapping-sync = { git = "https://github.com/purestake/frontier", branch = "moonbeam-polkadot-v0.9.20" }
 futures = { version = "0.3.1", features = [ "compat" ] }
+fp-storage = { git = "https://github.com/purestake/frontier", branch = "moonbeam-polkadot-v0.9.20" }
 
 [build-dependencies]
 substrate-build-script-utils = { version = "3.0.0", git = "https://github.com/paritytech/substrate.git", branch = "polkadot-v0.9.20" }
@@ -79,4 +81,6 @@ default = []
 runtime-benchmarks = ["node-template-runtime/runtime-benchmarks"]
 # Enable features that allow the runtime to be tried and debugged. Name might be subject to change
 # in the near future.
+rpc_binary_search_estimate = ["fc-rpc/rpc_binary_search_estimate"]
+
 try-runtime = ["node-template-runtime/try-runtime", "try-runtime-cli"]

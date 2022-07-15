@@ -10,9 +10,17 @@ use sc_keystore::LocalKeystore;
 use sc_service::{error::Error as ServiceError, BasePath, Configuration, TaskManager};
 use sc_telemetry::{Telemetry, TelemetryWorker};
 use sp_consensus_aura::sr25519::AuthorityPair as AuraPair;
-use std::{sync::Arc, time::Duration};
+use std::{
+	collections::BTreeMap,
+	sync::{Arc, Mutex},
+	time::Duration,
+};
 use fc_mapping_sync::{MappingSyncWorker, SyncStrategy};
+use fc_rpc::{EthTask, OverrideHandle};
+use fc_rpc_core::types::{FeeHistoryCache, FeeHistoryCacheLimit, FilterPool};
 use futures::StreamExt;
+use crate::cli::Cli;
+
 // Our native executor instance.
 pub struct ExecutorDispatch;
 
@@ -59,8 +67,180 @@ pub fn open_frontier_backend(config: &Configuration) -> Result<Arc<fc_db::Backen
 	})?))
 }
 
+
+pub fn new_partial2(
+	config: &Configuration,
+	cli: &Cli,
+) -> Result<
+	sc_service::PartialComponents<
+		FullClient,
+		FullBackend,
+		FullSelectChain,
+		sc_consensus::DefaultImportQueue<Block, FullClient>,
+		sc_transaction_pool::FullPool<Block, FullClient>,
+		(
+			Option<Telemetry>,
+			ConsensusResult,
+			Arc<fc_db::Backend<Block>>,
+			Option<FilterPool>,
+			(FeeHistoryCache, FeeHistoryCacheLimit),
+		),
+	>,
+	ServiceError,
+> {
+	if config.keystore_remote.is_some() {
+		return Err(ServiceError::Other(
+			"Remote Keystores are not supported.".to_string(),
+		));
+	}
+
+	let telemetry = config
+		.telemetry_endpoints
+		.clone()
+		.filter(|x| !x.is_empty())
+		.map(|endpoints| -> Result<_, sc_telemetry::Error> {
+			let worker = TelemetryWorker::new(16)?;
+			let telemetry = worker.handle().new_telemetry(endpoints);
+			Ok((worker, telemetry))
+		})
+		.transpose()?;
+
+	let executor = NativeElseWasmExecutor::<ExecutorDispatch>::new(
+		config.wasm_method,
+		config.default_heap_pages,
+		config.max_runtime_instances,
+		config.runtime_cache_size,
+	);
+
+	let (client, backend, keystore_container, task_manager) =
+		sc_service::new_full_parts::<Block, RuntimeApi, _>(
+			config,
+			telemetry.as_ref().map(|(_, telemetry)| telemetry.handle()),
+			executor,
+		)?;
+	let client = Arc::new(client);
+
+	let telemetry = telemetry.map(|(worker, telemetry)| {
+		task_manager
+			.spawn_handle()
+			.spawn("telemetry", None, worker.run());
+		telemetry
+	});
+
+	let select_chain = sc_consensus::LongestChain::new(backend.clone());
+
+	let transaction_pool = sc_transaction_pool::BasicPool::new_full(
+		config.transaction_pool.clone(),
+		config.role.is_authority().into(),
+		config.prometheus_registry(),
+		task_manager.spawn_essential_handle(),
+		client.clone(),
+	);
+
+	let frontier_backend = open_frontier_backend(config)?;
+	let filter_pool: Option<FilterPool> = Some(Arc::new(Mutex::new(BTreeMap::new())));
+	let fee_history_cache: FeeHistoryCache = Arc::new(Mutex::new(BTreeMap::new()));
+	let fee_history_cache_limit: FeeHistoryCacheLimit = cli.run.fee_history_limit;
+
+	#[cfg(feature = "aura")]
+	{
+		use sc_client_api::ExecutorProvider;
+		use sp_consensus_aura::sr25519::AuthorityPair as AuraPair;
+
+		let (grandpa_block_import, grandpa_link) = sc_finality_grandpa::block_import(
+			client.clone(),
+			&(client.clone() as Arc<_>),
+			select_chain.clone(),
+			telemetry.as_ref().map(|x| x.handle()),
+		)?;
+
+		let frontier_block_import = FrontierBlockImport::new(
+			grandpa_block_import.clone(),
+			client.clone(),
+			frontier_backend.clone(),
+		);
+
+		let slot_duration = sc_consensus_aura::slot_duration(&*client)?;
+		let target_gas_price = cli.run.target_gas_price;
+		let create_inherent_data_providers = move |_, ()| async move {
+			let timestamp = sp_timestamp::InherentDataProvider::from_system_time();
+			let slot = sp_consensus_aura::inherents::InherentDataProvider::from_timestamp_and_slot_duration(
+				*timestamp,
+				slot_duration,
+			);
+			let dynamic_fee = fp_dynamic_fee::InherentDataProvider(U256::from(target_gas_price));
+			Ok((timestamp, slot, dynamic_fee))
+		};
+
+		let import_queue = sc_consensus_aura::import_queue::<AuraPair, _, _, _, _, _, _>(
+			sc_consensus_aura::ImportQueueParams {
+				block_import: frontier_block_import.clone(),
+				justification_import: Some(Box::new(grandpa_block_import)),
+				client: client.clone(),
+				create_inherent_data_providers,
+				spawner: &task_manager.spawn_essential_handle(),
+				can_author_with: sp_consensus::CanAuthorWithNativeVersion::new(
+					client.executor().clone(),
+				),
+				registry: config.prometheus_registry(),
+				check_for_equivocation: Default::default(),
+				telemetry: telemetry.as_ref().map(|x| x.handle()),
+			},
+		)?;
+
+		Ok(sc_service::PartialComponents {
+			client,
+			backend,
+			task_manager,
+			import_queue,
+			keystore_container,
+			select_chain,
+			transaction_pool,
+			other: (
+				telemetry,
+				(frontier_block_import, grandpa_link),
+				frontier_backend,
+				filter_pool,
+				(fee_history_cache, fee_history_cache_limit),
+			),
+		})
+	}
+
+	#[cfg(feature = "manual-seal")]
+	{
+		let sealing = cli.run.sealing;
+
+		let frontier_block_import =
+			FrontierBlockImport::new(client.clone(), client.clone(), frontier_backend.clone());
+
+		let import_queue = sc_consensus_manual_seal::import_queue(
+			Box::new(frontier_block_import.clone()),
+			&task_manager.spawn_essential_handle(),
+			config.prometheus_registry(),
+		);
+
+		Ok(sc_service::PartialComponents {
+			client,
+			backend,
+			task_manager,
+			import_queue,
+			keystore_container,
+			select_chain,
+			transaction_pool,
+			other: (
+				telemetry,
+				(frontier_block_import, sealing),
+				frontier_backend,
+				filter_pool,
+				(fee_history_cache, fee_history_cache_limit),
+			),
+		})
+	}
+}
+
 pub fn new_partial(
 	config: &Configuration,
+	cli: &Cli,
 ) -> Result<
 	sc_service::PartialComponents<
 		FullClient,
@@ -78,6 +258,8 @@ pub fn new_partial(
 			sc_finality_grandpa::LinkHalf<Block, FullClient, FullSelectChain>,
 			Arc<fc_db::Backend<Block>>,
 			Option<Telemetry>,
+			Option<FilterPool>,
+			(FeeHistoryCache, FeeHistoryCacheLimit),
 		),
 	>,
 	ServiceError,
@@ -128,6 +310,9 @@ pub fn new_partial(
 	);
 
 	let frontier_backend = open_frontier_backend(config)?;
+	let filter_pool: Option<FilterPool> = Some(Arc::new(Mutex::new(BTreeMap::new())));
+	let fee_history_cache: FeeHistoryCache = Arc::new(Mutex::new(BTreeMap::new()));
+	let fee_history_cache_limit: FeeHistoryCacheLimit = cli.run.fee_history_limit;
 
 	let (grandpa_block_import, grandpa_link) = sc_finality_grandpa::block_import(
 		client.clone(),
@@ -171,7 +356,9 @@ pub fn new_partial(
 		keystore_container,
 		select_chain,
 		transaction_pool,
-		other: (grandpa_block_import, grandpa_link, frontier_backend, telemetry),
+		other: (grandpa_block_import, grandpa_link, frontier_backend, telemetry,
+			filter_pool,
+			(fee_history_cache, fee_history_cache_limit),),
 	})
 }
 
@@ -183,7 +370,11 @@ fn remote_keystore(_url: &String) -> Result<Arc<LocalKeystore>, &'static str> {
 }
 
 /// Builds a new service for a full client.
-pub fn new_full(mut config: Configuration) -> Result<TaskManager, ServiceError> {
+pub fn new_full(mut config: Configuration, cli: &Cli) -> Result<TaskManager, ServiceError> {
+	use sc_client_api::{BlockBackend, ExecutorProvider};
+	use sc_network::warp_request_handler::WarpSyncProvider;
+	use sp_consensus_aura::sr25519::AuthorityPair as AuraPair;
+
 	let sc_service::PartialComponents {
 		client,
 		backend,
@@ -192,8 +383,28 @@ pub fn new_full(mut config: Configuration) -> Result<TaskManager, ServiceError> 
 		mut keystore_container,
 		select_chain,
 		transaction_pool,
-		other: (block_import, grandpa_link, frontier_backend, mut telemetry),
-	} = new_partial(&config)?;
+		other: (block_import, grandpa_link, frontier_backend, mut telemetry,
+			filter_pool,
+			(fee_history_cache, fee_history_cache_limit),),
+	} = new_partial(&config, &cli)?;
+
+	let sc_service::PartialComponents {
+		client,
+		backend,
+		mut task_manager,
+		import_queue,
+		mut keystore_container,
+		select_chain,
+		transaction_pool,
+		other:
+			(
+				mut telemetry,
+				consensus_result,
+				frontier_backend,
+				filter_pool,
+				(fee_history_cache, fee_history_cache_limit),
+			),
+	} = new_partial2(&config, cli)?;
 
 	if let Some(url) = &config.keystore_remote {
 		match remote_keystore(url) {
@@ -247,18 +458,45 @@ pub fn new_full(mut config: Configuration) -> Result<TaskManager, ServiceError> 
 	let name = config.network.node_name.clone();
 	let enable_grandpa = !config.disable_grandpa;
 	let prometheus_registry = config.prometheus_registry().cloned();
+	let overrides = crate::rpc::overrides_handle(client.clone());
+	let block_data_cache = Arc::new(fc_rpc::EthBlockDataCacheTask::new(
+		task_manager.spawn_handle(),
+		overrides.clone(),
+		50,
+		50,
+		prometheus_registry.clone(),
+	));
 
 	let rpc_extensions_builder = {
 		let client = client.clone();
 		let pool = transaction_pool.clone();
+		let is_authority = role.is_authority();
+		let enable_dev_signer = cli.run.enable_dev_signer;
 		let network = network.clone();
+		let filter_pool = filter_pool.clone();
+		let frontier_backend = frontier_backend.clone();
+		let overrides = overrides.clone();
+		let fee_history_cache = fee_history_cache.clone();
+		let max_past_logs = cli.run.max_past_logs;
+		let subscription_task_executor =
+			sc_rpc::SubscriptionTaskExecutor::new(task_manager.spawn_handle());
 
 		Box::new(move |deny_unsafe, _| {
 			let deps = crate::rpc::FullDeps {
 				client: client.clone(),
 				pool: pool.clone(),
+				graph: pool.pool().clone(),
 				deny_unsafe,
+				is_authority,
+				enable_dev_signer,
 				network: network.clone(),
+				filter_pool: filter_pool.clone(),
+				backend: frontier_backend.clone(),
+				max_past_logs,
+				fee_history_cache: fee_history_cache.clone(),
+				fee_history_cache_limit,
+				overrides: overrides.clone(),
+				block_data_cache: block_data_cache.clone(),
 			};
 
 			Ok(crate::rpc::create_full(deps))
