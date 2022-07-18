@@ -4037,6 +4037,7 @@ dependencies = [
  "futures 0.3.21",
  "hex-literal",
  "jsonrpc-core",
+ "jsonrpc-pubsub",
  "node-template-runtime",
  "pallet-transaction-payment",
  "pallet-transaction-payment-rpc",

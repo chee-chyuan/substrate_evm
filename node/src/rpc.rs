@@ -7,6 +7,8 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
+use jsonrpc_pubsub::manager::SubscriptionManager;
+
 use node_template_runtime::{opaque::Block, AccountId, Balance, Hash, Index, TransactionConverter};
 pub use sc_rpc_api::DenyUnsafe;
 use sc_transaction_pool_api::TransactionPool;
@@ -160,6 +162,8 @@ A: ChainApi<Block = Block> + 'static,
 		true,
 	)));
 
+	io.extend_with(Web3Api::to_delegate(Web3::new(client.clone())));
+
 	let mut signers = Vec::new();
 	if enable_dev_signer {
 		signers.push(Box::new(EthDevSigner::new()) as Box<dyn EthSigner>);
@@ -179,6 +183,17 @@ A: ChainApi<Block = Block> + 'static,
 		fc_rpc::format::Legacy,
 		fee_history_cache,
 		fee_history_cache_limit,
+	)));
+
+	io.extend_with(EthPubSubApi::to_delegate(EthPubSub::new(
+		pool,
+		client,
+		network,
+		SubscriptionManager::<HexEncodedIdProvider>::with_id_provider(
+			HexEncodedIdProvider::default(),
+			Arc::new(subscription_task_executor),
+		),
+		overrides,
 	)));
 
 	io
