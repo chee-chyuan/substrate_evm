@@ -16,11 +16,13 @@ use std::{
 };
 
 use crate::cli::Cli;
-use sc_cli::SubstrateCli;
 use fc_db::DatabaseSource;
 use fc_mapping_sync::{MappingSyncWorker, SyncStrategy};
 use fc_rpc::{EthTask, OverrideHandle};
 use fc_rpc_core::types::{FeeHistoryCache, FeeHistoryCacheLimit, FilterPool};
+use futures::{future, StreamExt};
+use sc_cli::SubstrateCli;
+use sc_client_api::BlockchainEvents;
 // Our native executor instance.
 pub struct ExecutorDispatch;
 
@@ -203,27 +205,22 @@ pub fn frontier_database_dir(config: &Configuration, path: &str) -> std::path::P
 }
 
 pub fn open_frontier_backend(config: &Configuration) -> Result<Arc<fc_db::Backend<Block>>, String> {
-	Ok(Arc::new(fc_db::Backend::<Block>::new(
-		&fc_db::DatabaseSettings {
-			source: match config.database {
-				DatabaseSource::RocksDb { .. } => DatabaseSource::RocksDb {
-					path: frontier_database_dir(config, "db"),
-					cache_size: 0,
-				},
-				DatabaseSource::ParityDb { .. } => DatabaseSource::ParityDb {
-					path: frontier_database_dir(config, "paritydb"),
-				},
-				DatabaseSource::Auto { .. } => DatabaseSource::Auto {
-					rocksdb_path: frontier_database_dir(config, "db"),
-					paritydb_path: frontier_database_dir(config, "paritydb"),
-					cache_size: 0,
-				},
-				_ => {
-					return Err("Supported db sources: `rocksdb` | `paritydb` | `auto`".to_string())
-				}
+	Ok(Arc::new(fc_db::Backend::<Block>::new(&fc_db::DatabaseSettings {
+		source: match config.database {
+			DatabaseSource::RocksDb { .. } => {
+				DatabaseSource::RocksDb { path: frontier_database_dir(config, "db"), cache_size: 0 }
 			},
+			DatabaseSource::ParityDb { .. } => {
+				DatabaseSource::ParityDb { path: frontier_database_dir(config, "paritydb") }
+			},
+			DatabaseSource::Auto { .. } => DatabaseSource::Auto {
+				rocksdb_path: frontier_database_dir(config, "db"),
+				paritydb_path: frontier_database_dir(config, "paritydb"),
+				cache_size: 0,
+			},
+			_ => return Err("Supported db sources: `rocksdb` | `paritydb` | `auto`".to_string()),
 		},
-	)?))
+	})?))
 }
 
 /// Builds a new service for a full client.
@@ -356,11 +353,22 @@ pub fn new_full(mut config: Configuration, cli: &Cli) -> Result<TaskManager, Ser
 		task_manager: &mut task_manager,
 		transaction_pool: transaction_pool.clone(),
 		rpc_extensions_builder,
-		backend,
+		backend: backend.clone(),
 		system_rpc_tx,
 		config,
 		telemetry: telemetry.as_mut(),
 	})?;
+
+	spawn_frontier_tasks(
+		&task_manager,
+		client.clone(),
+		backend,
+		frontier_backend,
+		filter_pool,
+		overrides,
+		fee_history_cache,
+		fee_history_cache_limit,
+	);
 
 	if role.is_authority() {
 		let proposer_factory = sc_basic_authorship::ProposerFactory::new(
@@ -458,4 +466,60 @@ pub fn new_full(mut config: Configuration, cli: &Cli) -> Result<TaskManager, Ser
 
 	network_starter.start_network();
 	Ok(task_manager)
+}
+
+fn spawn_frontier_tasks(
+	task_manager: &TaskManager,
+	client: Arc<FullClient>,
+	backend: Arc<FullBackend>,
+	frontier_backend: Arc<fc_db::Backend<Block>>,
+	filter_pool: Option<FilterPool>,
+	overrides: Arc<OverrideHandle<Block>>,
+	fee_history_cache: FeeHistoryCache,
+	fee_history_cache_limit: FeeHistoryCacheLimit,
+) {
+	task_manager.spawn_essential_handle().spawn(
+		"frontier-mapping-sync-worker",
+		None,
+		MappingSyncWorker::new(
+			client.import_notification_stream(),
+			Duration::new(6, 0),
+			client.clone(),
+			backend,
+			frontier_backend.clone(),
+			3,
+			0,
+			SyncStrategy::Normal,
+		)
+		.for_each(|()| future::ready(())),
+	);
+
+	// Spawn Frontier EthFilterApi maintenance task.
+	if let Some(filter_pool) = filter_pool {
+		// Each filter is allowed to stay in the pool for 100 blocks.
+		const FILTER_RETAIN_THRESHOLD: u64 = 100;
+		task_manager.spawn_essential_handle().spawn(
+			"frontier-filter-pool",
+			None,
+			EthTask::filter_pool_task(client.clone(), filter_pool, FILTER_RETAIN_THRESHOLD),
+		);
+	}
+
+	// Spawn Frontier FeeHistory cache maintenance task.
+	task_manager.spawn_essential_handle().spawn(
+		"frontier-fee-history",
+		None,
+		EthTask::fee_history_task(
+			client.clone(),
+			overrides,
+			fee_history_cache,
+			fee_history_cache_limit,
+		),
+	);
+
+	task_manager.spawn_essential_handle().spawn(
+		"frontier-schema-cache-task",
+		None,
+		EthTask::ethereum_schema_cache_task(client, frontier_backend),
+	);
 }

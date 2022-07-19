@@ -4,6 +4,7 @@ members = [
     "pallets/template",
     "pallets/test_ethereum",
     "runtime",
+    "primitive/account",
 ]
 [profile.release]
 panic = "unwind"

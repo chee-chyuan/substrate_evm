@@ -56,7 +56,7 @@ pallet-evm = { git = "https://github.com/purestake/frontier", branch = "moonbeam
 pallet-base-fee = { git = "https://github.com/purestake/frontier", branch = "moonbeam-polkadot-v0.9.20", default-features = false }
 fp-rpc = { git = "https://github.com/purestake/frontier", branch = "moonbeam-polkadot-v0.9.20", default-features = false }
 fp-self-contained = { git = "https://github.com/purestake/frontier", branch = "moonbeam-polkadot-v0.9.20", default-features = false }
-
+account = { path = "../primitive/account", default-features = false }
 
 [build-dependencies]
 substrate-wasm-builder = { version = "5.0.0-dev", git = "https://github.com/paritytech/substrate.git", branch = "polkadot-v0.9.20" }
@@ -95,6 +95,7 @@ std = [
 	"fp-rpc/std",
 	"pallet-base-fee/std",
 	"fp-self-contained/std",
+	"account/std",
 ]
 runtime-benchmarks = [
 	"frame-benchmarking/runtime-benchmarks",

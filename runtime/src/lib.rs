@@ -11,7 +11,7 @@ use pallet_grandpa::{
 };
 use sp_api::impl_runtime_apis;
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
-use sp_core::{crypto::KeyTypeId, OpaqueMetadata, H160, H256, U256};
+use sp_core::{crypto::{KeyTypeId, ByteArray}, OpaqueMetadata, H160, H256, U256};
 use sp_runtime::{
 	create_runtime_str, generic, impl_opaque_keys,
 	traits::{
@@ -21,10 +21,11 @@ use sp_runtime::{
 	transaction_validity::{TransactionSource, TransactionValidity, TransactionValidityError},
 	ApplyExtrinsicResult, MultiSignature,
 };
-use sp_std::prelude::*;
+use sp_std::{marker::PhantomData, prelude::*};
 #[cfg(feature = "std")]
 use sp_version::NativeVersion;
 use sp_version::RuntimeVersion;
+use account::AccountId20;
 
 // A few exports that help ease life for downstream crates.
 pub use frame_support::{
@@ -34,7 +35,7 @@ pub use frame_support::{
 		constants::{BlockExecutionWeight, ExtrinsicBaseWeight, RocksDbWeight, WEIGHT_PER_SECOND},
 		IdentityFee, Weight,
 	},
-	StorageValue,
+	ConsensusEngineId, StorageValue,
 };
 pub use frame_system::Call as SystemCall;
 pub use pallet_balances::Call as BalancesCall;
@@ -54,6 +55,34 @@ use pallet_evm::{
 	Account as EVMAccount, EnsureAddressTruncated, FeeCalculator, GasWeightMapping,
 	HashedAddressMapping, Runner,
 };
+use frame_support::traits::FindAuthor;
+pub struct FindAuthorAdapter<Inner>(sp_std::marker::PhantomData<Inner>);
+
+impl<Inner> FindAuthor<H160> for FindAuthorAdapter<Inner>
+where
+	Inner: FindAuthor<AccountId20>,
+{
+	fn find_author<'a, I>(digests: I) -> Option<H160>
+	where
+		I: 'a + IntoIterator<Item = (sp_runtime::ConsensusEngineId, &'a [u8])>,
+	{
+		Inner::find_author(digests).map(Into::into)
+	}
+}
+
+pub struct FindAuthorTruncated<F>(PhantomData<F>);
+impl<F: FindAuthor<u32>> FindAuthor<H160> for FindAuthorTruncated<F> {
+	fn find_author<'a, I>(digests: I) -> Option<H160>
+	where
+		I: 'a + IntoIterator<Item = (ConsensusEngineId, &'a [u8])>,
+	{
+		if let Some(author_index) = F::find_author(digests) {
+			let authority_id = Aura::authorities()[author_index as usize].clone();
+			return Some(H160::from_slice(&authority_id.to_raw_vec()[4..24]));
+		}
+		None
+	}
+}
 
 /// An index to a block.
 pub type BlockNumber = u32;
@@ -365,7 +394,7 @@ impl pallet_evm::Config for Runtime {
 	type ChainId = ChainId;
 	type BlockGasLimit = BlockGasLimit;
 	type OnChargeTransaction = ();
-	type FindAuthor = (); // FindAuthorTruncated<Aura>;
+	type FindAuthor = FindAuthorTruncated<Aura>; // FindAuthorAdapter<AuthorInherent>; // (); // FindAuthorTruncated<Aura>;
 	type WeightInfo = pallet_evm::weights::SubstrateWeight<Self>;
 }
 
